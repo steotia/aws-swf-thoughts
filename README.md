@@ -1,11 +1,23 @@
 # aws-swf-thoughts
 My thoughts on writing workflows on AWS SWF
-## How to build interface between application and SWF?
+## How to build interface between Application and SWF?
 ### Assumptions
 - There is separation between Application & SWF code. SWF code is the software around creating domain , registering workflow types, activities, deciders, etc. Application software is the general purpose software typically running as interface to users, like a CRM system, CustomerCare dashboard, mobile app, etc
 - Various workflows are defined and runnable but we are looking at mechanisms where external actors can participate in respective workflows, typically to start a workflow or provide a user action like checkout, etc
 - This question is more about how to interface with a workflow created using SWF and high level library/interfaces which developers can follow/improve to make it easier to interface with workflows without needing to understand the various complexities around how the workflow is actually implemented
+- The approach is not tied to a specific language and is a high level organisation of code. Language specific nuances are avoided where possible.
 ### Approach
 - AWS SWF allows interaction via 3 mechanisms: (1) SDK (2) Flow Framework and (3) Service API. I propose using (3) Service API for an App to talk to the Workflow as it allows for a much simpler implementation. Flow Framework maybe used to implement the code on the workflow side (async deciders, activity, etc) but more on that later when we come to how to write deciders and activities in SWF.
-- While Starting a WF is simple, AWS SWF has a notion called [Signal]( https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-signals.html) to externally inform a workflow execution
-- Any workflow will have specific defaults, which are relevant for starting (domain, workflow type, tasklist) & signalling (domain) and to keep the code DRY, workflow specific defaults can be packaged separately and can be imported by both the App and SWF code
+- While Starting a WF is simple, AWS SWF has a notion called [Signal]( https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-signals.html) to externally inform a workflow execution. Workflow decider code has to implement a [Timer](https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-timers.html) and have business logic to check if a Signal came before a Timer fired, vice versa and respond accordingly
+- In cases, where the application is not directly involved, but the user is involved outside the application, for instance, via email, SMS, etc, then AWS SNS can be used to interact with the long running activity waiting for user action
+- For cases, which may need conditional signals (e.g. approve only when some condition is met), the application state should be used for enabling or disabling the signalling mechanism. For instance, if the workflow is that after subscription, a user can subscribe for a new package only if he/she has returned or purchased the rented furniture of the old package, then the IF condition: User wants to subscribe && User out of subscription && User has returned or purchased old subscription furniture is application state. This application state should not be in Decider state.
+- Any workflow will have specific defaults, which are relevant for starting (domain, workflow type, tasklist) & signalling (domain) and to keep the code DRY, workflow specific defaults can be packaged separately and can be imported by both the App and SWF code. So, in all there are 3 components involved for every workflow: (a) interfaces, base classes, common code, constants, defaults, exceptions, policies, etc (b) workflow gateway code for UI (starter,signal) and (c) workflow implementations - workflow/activity register, starter, decider, activity, etc. Both (b) and (c) pull in (a) as build dependencies. (b) may not be required for all workflows, only those where application code needs to interact with the workflow.
+### Apprehensions
+- Workflows are best represented as state machines. AWS SWF is not a true representation of a state machine, thus Deciders can become very complex and start accumulating conditions over a complex workflow
+- AWS SWF deciders and activity workers are based on Long Polling which has 2 major issues (a) consumes more resources than needed - an EC2 machine is always running (b) there is lag between activities - this lag can accumulate over activities and can make the overall workflow slow (c) can encounter issues when workers do not gracefully shutdown between polls
+- There is no way to visualize the state diagram and the current state, this is a very big minus
+- Flow Framework is not very easy to consume, low level APIs are not async in nature
+- AWS SWF is no longer being actively developed
+### Alternative
+- AWS Step Functions instead of using AWS SWF - Haven't deeply investigated but at a high level and reading up, AWS Step Functions seem to be a great alternative in that (a) can be created declaratively (b) behaves like a state machine (c) has better integration with other AWS managed services (d) is native serverless
+- AWS SWF is a good solution but AWS Step Functions are a higher abstraction and lets people focus more on the workflow than the software to make it work
