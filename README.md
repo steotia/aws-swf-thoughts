@@ -1,8 +1,10 @@
 # aws-swf-thoughts
-My thoughts on writing workflows on AWS SWF
+My thoughts on writing workflows on AWS SWF.
+
+DISCLAIMER: I have never created workflows using SWF. Following is my understanding after some quick research.
 ## How to build interface between Application and SWF?
 ### Assumptions
-- There is separation between Application & SWF code. SWF code is the software around creating domain , registering workflow types, activities, deciders, etc. Application software is the general purpose software typically running as interface to users, like a CRM system, CustomerCare dashboard, mobile app, etc
+- There is separation between Application & SWF code. SWF code is the software around creating domain, registering workflow types, activities, deciders, etc. Application software is the general purpose software typically running as interface to users, like a CRM system, CustomerCare dashboard, mobile app, etc
 - Various workflows are defined and runnable but we are looking at mechanisms where external actors can participate in respective workflows, typically to start a workflow or provide a user action like checkout, etc
 - This question is more about how to interface with a workflow created using SWF and high level library/interfaces which developers can follow/improve to make it easier to interface with workflows without needing to understand the various complexities around how the workflow is actually implemented
 - The approach is not tied to a specific language and is a high level organisation of code. Language specific nuances are avoided where possible.
@@ -12,12 +14,71 @@ My thoughts on writing workflows on AWS SWF
 - In cases, where the application is not directly involved, but the user is involved outside the application, for instance, via email, SMS, etc, then AWS SNS can be used to interact with the long running activity waiting for user action
 - For cases, which may need conditional signals (e.g. approve only when some condition is met), the application state should be used for enabling or disabling the signalling mechanism. For instance, if the workflow is that after subscription, a user can subscribe for a new package only if he/she has returned or purchased the rented furniture of the old package, then the IF condition: User wants to subscribe && User out of subscription && User has returned or purchased old subscription furniture is application state. This application state should not be in Decider state.
 - Any workflow will have specific defaults, which are relevant for starting (domain, workflow type, tasklist) & signalling (domain) and to keep the code DRY, workflow specific defaults can be packaged separately and can be imported by both the App and SWF code. So, in all there are 3 components involved for every workflow: (a) interfaces, base classes, common code, constants, defaults, exceptions, policies, etc (b) workflow gateway code for UI (starter,signal) and (c) workflow implementations - workflow/activity register, starter, decider, activity, etc. Both (b) and (c) pull in (a) as build dependencies. (b) may not be required for all workflows, only those where application code needs to interact with the workflow.
+- Since we have crossed a bounded context between Application and SWF, an association between Application and SWF is required (e.g. subscriptionID and runID), to retrieve the workflow run against a specific application object
+- If required, the SDK can be interfaced with an HTTP endpoint, enabling other concerns like RBAC control, etc (who can start and signal the workflow, etc)
+### Solution
+Let me take a simple case, where CasaOne wishes to upSell subscription. So, someone (Sales) at the App, may trigger a workflow for upsell and someone else (Sales Manager) may want to approve or reject the upSell or adjust the upsell range, add some discount etc. So, following displays 2 steps (1) starting the flow and (2) approving or rejecting one of the stages
+
+### Rough Abstrations and Encapsulations
+`com.casaone.utils.swf` <= common concerns
+
+| SWFUtil | 
+| ------------- |
+| getClient() : Client |
+| saveWF(GUID, RunResponse): Boolean |
+
+`com.casaone.wf.swf.common` <= interfaces
+
+| WFAppGatewayI | 
+| ------------- |
+| startWF(Client, ApplicationID) : RunResponse |
+| signalWF(Client, ApplicationID, RunID, Signal, Input) : SignalResponse |
+
+`com.casaone.wf.swf.upsell.app` <= implementation for app
+
+| UpSellWFAppGatewayImpl | 
+| ------------- |
+| startWF(...)|
+| signalWF(...)|
+
+- imports `com.casaone.wf.swf.upsell.common.Types` for getting contextual constants
+
+`com.casaone.wf.swf.upsell.common` <= common concerns for upsell workflow
+
+| Types | 
+| ------------- |
+| Domain, TaskList, Activities|
+
+### API consumption at App
+```
+// initiating up selling flow by a manual action from the App
+// record in DB for upsell
+upSellID = createUpSellRecord()
+client = SWFUtil.getClient()
+UpSellWFAppGatewayImpl upSell = new UpSellWFAppGatewayImpl()
+RunResponse r = upSell.startWF(client, upSellID)
+SWFUtil.saveWF(upSellID,r)
+```
+```
+// lets say upsell needs an approval
+upSell = getUpSell(request)
+client = SWFUtil.getClient()
+UpSellWFAppGatewayImpl upSell = new UpSellWFAppGatewayImpl()
+RunResponse r = SWFUtil.getWF(upSellID)
+upSellDecision = figureUpSell(upSell)
+if upSellDecision.possible
+  upSell.signalWF(client,upSell.ID,r.RunID,'UpSellApproval',upSellDecision.Result)
+else
+  upSell.signalWF(client,upSell.ID,r.RunID,'UpSellReject',upSellDecision.Result)
+```
+
 ### Apprehensions
 - Workflows are best represented as state machines. AWS SWF is not a true representation of a state machine, thus Deciders can become very complex and start accumulating conditions over a complex workflow
-- AWS SWF deciders and activity workers are based on Long Polling which has 2 major issues (a) consumes more resources than needed - an EC2 machine is always running (b) there is lag between activities - this lag can accumulate over activities and can make the overall workflow slow (c) can encounter issues when workers do not gracefully shutdown between polls
+- AWS SWF deciders and activity workers are based on Long Polling which have issues (a) consumes more resources than needed - an EC2 machine is always running (b) there is lag between activities - this lag can accumulate over activities and decisions and can make the overall workflow slow (c) can encounter issues when workers do not gracefully shutdown between polls
+- Even if activity can be run as serverles, Decider programs are not natively serverless
 - There is no way to visualize the state diagram and the current state, this is a very big minus
 - Flow Framework is not very easy to consume, low level APIs are not async in nature
-- AWS SWF is no longer being actively developed
+- AWS SWF is supported but no longer being actively developed
 ### Alternative
-- AWS Step Functions instead of using AWS SWF - Haven't deeply investigated but at a high level and reading up, AWS Step Functions seem to be a great alternative in that (a) can be created declaratively (b) behaves like a state machine (c) has better integration with other AWS managed services (d) is native serverless
-- AWS SWF is a good solution but AWS Step Functions are a higher abstraction and lets people focus more on the workflow than the software to make it work
+- AWS Step Functions instead of using AWS SWF - Haven't deeply investigated but at a high level and reading up, AWS Step Functions seem to be a good alternative in that (a) can be created declaratively (b) behaves like a state machine (c) has better integration with other AWS managed services (d) is native serverless, possibly cheaper to develop and operate
+- AWS SWF is a good solution but AWS Step Functions are a higher abstraction and lets people focus more on the workflow than the software to make it work. People can focus on activities and deciders are part of the way you create the decision tree.
