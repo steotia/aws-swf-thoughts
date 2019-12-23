@@ -11,17 +11,17 @@ DISCLAIMER: I have never created workflows using SWF.
 - AWS SWF allows interaction via 3 mechanisms: (1) SDK (2) Flow Framework and (3) Service API. I propose using the Flow Framework for both (a) external and (b) internal communication with SWF components. The Flow framework has factory methods to get both internal and external clients. The Application code can use the external client to communicate with the workflow defined in SWF, while the SWF code can use the internal client to perform async communication
 - Applications typically will either start a workflow or send a message to it which can in turn trigger decision(s) and activity(ies)
 - For messaging, AWS SWF has a notion called [Signal]( https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-signals.html) to externally inform a workflow execution. 
-- For cases, which may need conditional signals (e.g. approve only when some condition is met), generated external client also provides to obtain the last `Status` of the workflow. That in combination with Application state can be used in Application business logic. 
+- For cases, which may need conditional signals (e.g. approve only when some condition is met), generated external client also provides to obtain the last *Status* of the workflow. That in combination with Application state can be used in Application business logic. 
 - Since we have crossed a bounded context between Application and SWF, an association between Application and SWF is required (e.g. appID and runID), to communicate with the correct workflow process
 - If required, the external client can be wrapped with an HTTP endpoint, enabling other concerns like RBAC control, etc (who can start and signal the workflow, etc)
 ### Solution
 #### AWS Flow provides a library to allow comunication
 If we use AWS Flow, we get the following agents which can talk async
 0. XActivities and YWorkflow contain the API definition (*Interface*), XActivitiesImpl & YWorkflowImpl are implementing it
-1. Activity Worker: pending Activities <-> ActivityWorker <-> XActivitiesImpl <-> done Activities 
-2. Workflow Worker: pending Decisions <-> WorkflowWorker <-> YWorkflowImpl <-> (XActivitiesClientImpl) <-> pending Activities
-3. Workflow Worker: pending Decisions <-> WorkflowWorker <-> YWorkflowImpl <-> more Decisions
-In addition to this, we also get an External Client which can be used to communicate externally with SWF. So, if `YWorkflow` is the Interface then `YWorkflowClientExternalFactoryImpl` is a Factory which can create an External client via `getClient(<ID>)`. Hence, we can see that if our workflow is defined using AWS Flow, we get some boilerplate code already to start talking to it from an Application
+1. *Activity Worker*: pending Activities <-> ActivityWorker <-> XActivitiesImpl <-> done Activities 
+2. *Workflow Worker*: pending Decisions <-> WorkflowWorker <-> YWorkflowImpl <-> (XActivitiesClientImpl) <-> pending Activities
+3. *Workflow Worker*: pending Decisions <-> WorkflowWorker <-> YWorkflowImpl <-> more Decisions
+In addition to this, we also get an *External Client* which can be used to communicate externally with SWF. So, if `YWorkflow` is the Interface then `YWorkflowClientExternalFactoryImpl` is a Factory which can create an *External client* via `getClient(<ID>)`. Hence, we can see that if our workflow is defined using AWS Flow, we get some boilerplate code already to start talking to it from an Application. However, some of the boilerplate is intense and repetitive, so the first step is to reduce the complexity at the surface (=client)
 ### API consumption at App
 Let me take a simple case, where CasaOne wishes to upSell subscription. So, someone (Sales) at the App, may trigger a workflow for upsell and someone else (Sales Manager) may want to approve or reject the upSell or adjust the upsell range, add some discount etc. So, following displays 2 steps (1) starting the flow and (2) approving or rejecting one of the stages
 
