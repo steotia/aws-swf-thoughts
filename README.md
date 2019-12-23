@@ -6,10 +6,11 @@ DISCLAIMER: I have never created workflows using SWF.
 ### Assumptions
 - There is separation between Application & SWF code. SWF code is the software around creating domain, registering workflow types, activities, deciders, etc. Application software is the general purpose software typically running as interface to users, like a CRM system, CustomerCare dashboard, mobile app, etc
 - Various workflows will be defined but we are looking at mechanisms where external actors can participate in respective workflows, typically to start a workflow or provide a user action like approval, checkout, etc
+- SWF Workflow development is being done using SWF Flow Framework and not by low level SWF SDK
 ### Approach
 - AWS SWF allows interaction via 3 mechanisms: (1) SDK (2) Flow Framework and (3) Service API. I propose using the Flow Framework for both (a) external and (b) internal communication with SWF components. The Flow framework has factory methods to get both internal and external clients. The Application code can use the external client to communicate with the workflow defined in SWF, while the SWF code can use the internal client to perform async communication
 - Applications typically will either start a workflow or send a message to it which can in turn trigger decision(s) and activity(ies)
-- For messaging, AWS SWF has a notion called [Signal]( https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-signals.html) to externally inform a workflow execution. Workflow decider code has to implement a [Timer](https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-timers.html) and have business logic to check if a Signal came before a Timer fired, vice versa and respond accordingly
+- For messaging, AWS SWF has a notion called [Signal]( https://docs.aws.amazon.com/amazonswf/latest/developerguide/swf-dg-signals.html) to externally inform a workflow execution. 
 - For cases, which may need conditional signals (e.g. approve only when some condition is met), generated external client also provides to obtain the last `Status` of the workflow. That in combination with Application state can be used in Application business logic. 
 - Since we have crossed a bounded context between Application and SWF, an association between Application and SWF is required (e.g. appID and runID), to communicate with the correct workflow process
 - If required, the external client can be wrapped with an HTTP endpoint, enabling other concerns like RBAC control, etc (who can start and signal the workflow, etc)
@@ -57,7 +58,7 @@ else
 ```
 
 
-### Rough Abstrations and Encapsulations
+### Rough Abstrations and Encapsulations to make it easier for App developer
 `com.casaone.utils.swf` <= utility classes
 
 | SWFConfig | 
@@ -74,14 +75,20 @@ else
 
 | UpSellConfig | 
 | ------------- |
+| getDomain(): String |
+| createExternalClient(SWFConfig) : UpSellWorkflowClientExternal |
 | createExternalClient(SWFConfig,WorkflowExecution) : UpSellWorkflowClientExternal |
 
 | UpSellWorkflow (*Interface*) | 
 | ------------- |
-| upsell() | <= starter code
-| approve() | <= signal
-| reject() | <= signal
+| upsell() <= starter code | 
+| approve(Data) <= signal | 
+| reject(Reason) <= signal | 
+| getStatus() <= status | 
 
+Rest is Implementation of `UpSellWorkflow`, various Activity Interfaces, their implementations, Worker and Activity Host executable code and the generated classes.
+
+So, once the SWF WF development is complete, the App developer can import the respective package and use the simplified APIs (which take away the complexity of AWS Flow at the App end). Also, the dependencies between App and SWF Client can be managed via the package versions.
 
 ## 2. How to design the 'activities' and 'deciders' in SWF?
 ### Assumptions
@@ -98,16 +105,21 @@ AWS Flow Framework is a useful abstraction over the AWS SDK, taking over much of
 5. Workflow communicates to Activities via the Activities Client - generate the Activities Clients (proxy as per the `@Activities` Interfaces).
 6. In the Worker Implementation, use the Activities Client to perform activities. Use `Promise`s to perform activities asynchronously. Use `TryCatchFinally` to manage Exceptions raised during `Promise` execution and cleanup resources.
 7. Create executables for both Worker and Activity Host. Create JAR via Maven and deploy
+
+#### Handling various topologies
+A workflow need not be linear and may have split-merge, periodic, parallel, and many other patterns. AWS Flow Framework provides overloaded Activity methods with various combinations of Promise<T> params and the WorkflowImpl can chain Promises appropriately to allow different execution strategies.
+  
 #### Activities Packaging
-Certain activities are generic, for instance, read/write to storage, sending email/SMS, creating PDF, etc. So instead of packaging with the the workflow, I would encourage the team to package per functionality and import when required.
+Certain activities are generic, for instance, read/write to storage, sending email/SMS, creating PDF, etc. So instead of packaging with the the workflow, I would encourage the team to package per functionality and import in any workflow.
 #### Change management
+Follow [best practices](https://docs.aws.amazon.com/amazonswf/latest/awsflowguide/java-flow-making-changes-decider-code.html)
 ## Apprehensions
-- Workflows are best represented as state machines. AWS SWF is not a true representation of a state machine, thus Deciders can become very complex and start accumulating conditions over a complex workflow
+- AWS SWF documentation is not very great. SWF Flow Framework documentation is also not easy to understand especially considering the flexibility it offers. There is a steep learning curve involved. So, even a medium complex workflow can take a long time to develop and may have high maintenance.
+- Workflows are best represented as state machines. AWS SWF is not a true representation of a state machine, thus Deciders can become very complex and start accumulating conditions over a complex workflow.
 - AWS SWF deciders and activity workers are based on Long Polling which have issues (a) consumes more resources than needed - an EC2 machine is always running (b) there is lag between activities - this lag can accumulate over activities and decisions and can make the overall workflow slow (c) can encounter issues when workers do not gracefully shutdown between polls
 - Even if activity can be run as serverles, Decider programs are not natively serverless
 - There is no way to visualize the state diagram and the current state, this is a very big minus
-- Flow Framework is not very easy to consume, low level APIs are not async in nature
-- AWS SWF is supported but no longer being actively developed
-### Alternative
-- AWS Step Functions instead of using AWS SWF - Haven't deeply investigated but at a high level and reading up, AWS Step Functions seem to be a good alternative in that (a) can be created declaratively (b) behaves like a state machine (c) has better integration with other AWS managed services (d) is native serverless, possibly cheaper to develop and operate
-- AWS SWF is a good solution but AWS Step Functions are a higher abstraction and lets people focus more on the workflow than the software to make it work. People can focus on activities and deciders are part of the way you create the decision tree.
+- AWS SWF is supported but no longer being actively developed!
+## Alternative
+- Consider AWS Step Functions instead of using AWS SWF - Haven't deeply investigated but at a high level and reading up, AWS Step Functions seem to be a good alternative in that (a) can be created declaratively (b) behaves like a state machine (c) has better integration with other AWS managed services (d) is native serverless, possibly cheaper to develop and operate
+- AWS SWF is a good solution but AWS Step Functions are a higher abstraction and lets people focus more on the workflow than the software to make it work. People can focus on activities and deciders are part of the way you create the decision tree. Activity integrations with AWS Managed services are excellent.
