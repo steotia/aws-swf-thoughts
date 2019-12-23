@@ -1,8 +1,8 @@
 # aws-swf-thoughts
 My thoughts on writing workflows on AWS SWF.
 
-DISCLAIMER: I have never created workflows using SWF. Following is my understanding after some quick research.
-## How to build interface between Application and SWF?
+DISCLAIMER: I have never created workflows using SWF. 
+## 1. How to build interface between Application and SWF? High level design for folks to connect to SWF
 ### Assumptions
 - There is separation between Application & SWF code. SWF code is the software around creating domain, registering workflow types, activities, deciders, etc. Application software is the general purpose software typically running as interface to users, like a CRM system, CustomerCare dashboard, mobile app, etc
 - Various workflows are defined and runnable but we are looking at mechanisms where external actors can participate in respective workflows, typically to start a workflow or provide a user action like checkout, etc
@@ -33,6 +33,7 @@ Let me take a simple case, where CasaOne wishes to upSell subscription. So, some
 | ------------- |
 | startWF(Client, ApplicationID) : RunResponse |
 | signalWF(Client, ApplicationID, RunID, Signal, Input) : SignalResponse |
+| getStatusWF(Client)
 
 `com.casaone.wf.swf.upsell.app` <= implementation for app
 
@@ -71,8 +72,25 @@ if upSellDecision.possible
 else
   upSell.signalWF(client,upSell.ID,r.RunID,'UpSellReject',upSellDecision.Result)
 ```
-
-### Apprehensions
+## 2. How to design the 'activities' and 'deciders' in SWF?
+### Assumptions
+- Activities and Deciders are written using the Flow Framework 
+- Activities and Deciders are running as workers on EC2 machines
+### Approach
+AWS Flow Framework is a useful abstraction over the AWS SDK, taking over much of the grunt work of managing async communication. There is no point is re-writing it. However, the Flow Framework is not trivial to use, more focus could be on how to handle different workflow topologies via using the various overloaded activity methods with various combinations of Promise parameters for different kinds of blocking behavior. So instead of over engineering in the beginning, my recommendation is to start using it and then figure out common functionality which can be further abstracted out. Also, refer to AWS Flow Framework [recipes](https://github.com/aws-samples/aws-flow-ruby-samples) to see different ways of using the framework.
+### Solution
+#### General engineering flow
+1. Design the entire workflow in the form of a correct flowchart, breaking down activities and decisions, understanding where we could benefit from parallelism.
+2. First break down Activities into logical groups and create Interfaces for each logical group of activities, properly using the `@Activities`, `ActivityRegistrationOptions` for the `Interface` and other annotations to configure the various policies for the methods on the `Interface` (Backoff, timeouts, etc)
+3. Create the WorkFlow Interface to create the entrypoint (`@Execute`), various signal functions (`@Signal`) or status function (`@GetStatus`), where necessary. Not all workflows will need Signalling
+4. Implement the Activity Interfaces
+5. Workflow communicates to Activities via the Activities Client - generate the Activities Clients (proxy as per the `@Activities` Interfaces).
+6. In the Worker Implementation, use the Activities Client to perform activities. Use `Promise`s to perform activities asynchronously. Use `TryCatchFinally` to manage Exceptions raised during `Promise` execution and cleanup resources.
+7. Create executables for both Worker and Activity Host. Create JAR via Maven and deploy
+#### Activities Packaging
+Certain activities are generic, for instance, read/write to storage, sending email/SMS, creating PDF, etc. So instead of packaging with the the workflow, I would encourage the team to package per functionality and import when required.
+#### Change management
+## Apprehensions
 - Workflows are best represented as state machines. AWS SWF is not a true representation of a state machine, thus Deciders can become very complex and start accumulating conditions over a complex workflow
 - AWS SWF deciders and activity workers are based on Long Polling which have issues (a) consumes more resources than needed - an EC2 machine is always running (b) there is lag between activities - this lag can accumulate over activities and decisions and can make the overall workflow slow (c) can encounter issues when workers do not gracefully shutdown between polls
 - Even if activity can be run as serverles, Decider programs are not natively serverless
